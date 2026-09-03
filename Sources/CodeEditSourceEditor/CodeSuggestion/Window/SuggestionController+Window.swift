@@ -10,10 +10,19 @@ import AppKit
 extension SuggestionController {
     /// Will constrain the window's frame to be within the visible screen
     public func constrainWindowToScreenEdges(cursorRect: NSRect, font: NSFont) {
-        guard let window = self.window,
-              let screenFrame = window.screen?.visibleFrame else {
-            return
-        }
+        guard let window = self.window else { return }
+
+        // The screen is chosen from the cursor, not from the window. `window.screen` is
+        // `nil` whenever the window does not intersect a display, so reading it first
+        // makes this method unable to act in exactly the case that needs it most: a
+        // window that has ended up off-screen can never be brought back, because the
+        // one call that would reposition it returns early. The cursor rect is always
+        // on a screen, and it is also the more correct anchor on a multi-display setup
+        // — the suggestions belong beside the caret, not beside a stray window.
+        let screen = NSScreen.screens.first { $0.frame.intersects(cursorRect) }
+            ?? window.screen
+            ?? NSScreen.main
+        guard let screenFrame = screen?.visibleFrame else { return }
 
         let windowSize = window.frame.size
         let padding: CGFloat = 22
@@ -68,14 +77,30 @@ extension SuggestionController {
 
         guard let window else { return }
         let oldFrame = window.frame
+        let oldTopLeft = NSPoint(x: oldFrame.minX, y: oldFrame.maxY)
 
         window.minSize = newSize
         window.maxSize = NSSize(width: CGFloat.infinity, height: newSize.height)
 
         window.setContentSize(newSize)
 
-        if isWindowAboveCursor && oldFrame.size.height != newSize.height {
+        // Re-anchor the edge the window is attached to. `setContentSize` keeps the
+        // frame's origin — its *bottom* left — fixed, so a window hanging below the
+        // cursor drops by the height difference every time this is called. That was
+        // only corrected for the above-cursor case, which meant the common case walked.
+        //
+        // It walks rather than merely jumping once because the content view's layout
+        // restores the height it actually needs from the new top edge, so the frame
+        // ends up the same size in a new place: each call translates the window down
+        // by `oldHeight - newHeight` and nothing brings it back. A run of completion
+        // requests that return no items — an ordinary thing while typing an
+        // identifier the index does not know — sends the same shrink repeatedly and
+        // marches the window off the bottom of the screen a few hundred points at a
+        // time, still taking key events where it cannot be seen.
+        if isWindowAboveCursor {
             window.setFrameOrigin(oldFrame.origin)
+        } else {
+            window.setFrameTopLeftPoint(oldTopLeft)
         }
     }
 
