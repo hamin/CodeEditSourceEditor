@@ -12,6 +12,16 @@ import Combine
 public final class SuggestionController: NSWindowController {
     static var shared: SuggestionController = SuggestionController()
 
+    /// True while a completion is being written into the buffer.
+    ///
+    /// The insertion is a text mutation like any other and its last character is
+    /// usually a letter, so without this the trigger model reads accepting a
+    /// suggestion as typing one and reopens the window offering the entry that
+    /// was just accepted. Lives here rather than on the view model because
+    /// `SuggestionTriggerCharacterModel` is not main-actor isolated and reaches
+    /// the rest of this type the same way.
+    var isApplyingCompletion = false
+
     // MARK: - Properties
 
     /// Whether the suggestion window is visible

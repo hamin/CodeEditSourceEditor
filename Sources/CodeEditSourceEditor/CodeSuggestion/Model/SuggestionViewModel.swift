@@ -168,11 +168,13 @@ final class SuggestionViewModel: ObservableObject {
         guard let activeTextView else {
             return
         }
+        SuggestionController.shared.isApplyingCompletion = true
         self.delegate?.completionWindowApplyCompletion(
             item: item,
             textView: activeTextView,
             cursorPosition: activeTextView.cursorPositions.first
         )
+        SuggestionController.shared.isApplyingCompletion = false
         window?.close()
     }
 
