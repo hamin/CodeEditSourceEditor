@@ -37,6 +37,10 @@ final class SuggestionViewModel: ObservableObject {
         self.activeTextView = textView
         self.delegate = delegate
 
+        // Where the caret was when this was asked. Checked again before the
+        // answer is shown — see the guard in the task below.
+        let requestedLocation = cursorPosition.range.location
+
         // Each request carries the generation it was issued in, so a request
         // that outlives its usefulness cannot clear the bookkeeping for the one
         // that replaced it. Without this, an older task's `defer` nils
@@ -64,6 +68,38 @@ final class SuggestionViewModel: ObservableObject {
                 try Task.checkCancellation()
                 try await MainActor.run {
                     try Task.checkCancellation()
+
+                    // The caret may have moved while this was in flight, and
+                    // moving does not cancel the request: `cursorsUpdated`'s
+                    // refine path answers those keystrokes synchronously from
+                    // the list already in hand, without issuing a new one. So
+                    // this answer can arrive *after* several refinements and
+                    // describe a caret position that no longer exists —
+                    // replacing a narrowed list with the wider one it was
+                    // narrowed from, which reads as the window ignoring
+                    // everything typed after the first character.
+                    //
+                    // Cancellation cannot cover this. A refinement is not a new
+                    // request, so there is nothing to cancel it from; the
+                    // position is the only thing that says whether this answer
+                    // is still about the present.
+                    // The caret may have moved while this was in flight, and
+                    // moving does not cancel the request: `cursorsUpdated`'s
+                    // refine path answers those keystrokes synchronously from
+                    // the list already in hand, without issuing a new one. So
+                    // this answer can arrive *after* several refinements and
+                    // describe a caret position that no longer exists —
+                    // replacing a narrowed list with the wider one it was
+                    // narrowed from, which reads as the window ignoring
+                    // everything typed after the first character.
+                    //
+                    // Cancellation cannot cover this. A refinement is not a new
+                    // request, so there is nothing to cancel it from; the
+                    // position is the only thing that says whether this answer
+                    // is still about the present.
+                    guard textView.cursorPositions.first?.range.location == requestedLocation else {
+                        return
+                    }
 
                     guard let cursorPosition = textView.resolveCursorPosition(completionItems.windowPosition),
                           let cursorRect = textView.textView.layoutManager.rectForOffset(

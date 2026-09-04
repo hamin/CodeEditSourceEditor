@@ -1,5 +1,6 @@
 import Testing
 import AppKit
+import SwiftUI
 import CodeEditTextView
 @testable import CodeEditSourceEditor
 
@@ -18,7 +19,23 @@ struct SuggestionRequestCoalescingTests {
 
     /// A delegate whose request never finishes on its own, so a test can hold a
     /// request "in flight" for as long as it needs and record what it was asked.
+    struct StubEntry: CodeSuggestionEntry {
+        var label: String
+        var detail: String? { nil }
+        var insertText: String? { label }
+        var documentation: String? { nil }
+        var pathComponents: [String]? { nil }
+        var targetPosition: CursorPosition? { nil }
+        var sourcePreview: String? { nil }
+        var deprecated: Bool { false }
+        var image: Image { Image(systemName: "text.cursor") }
+        var imageColor: Color { .secondary }
+    }
+
     final class BlockingDelegate: CodeSuggestionDelegate {
+        /// What the request resolves to once released. `nil` keeps the old
+        /// behaviour of returning no items at all.
+        var itemsToReturn: [CodeSuggestionEntry]?
         var requestedPositions: [Int] = []
         /// One per request, in the order the requests were made, so a test can
         /// finish an *older* request while a newer one is still outstanding —
@@ -36,7 +53,8 @@ struct SuggestionRequestCoalescingTests {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 continuations.append(continuation)
             }
-            return nil
+            guard let itemsToReturn else { return nil }
+            return (windowPosition: cursorPosition, items: itemsToReturn)
         }
 
         func releaseAll() {
@@ -65,6 +83,11 @@ struct SuggestionRequestCoalescingTests {
     private func makeHost() throws -> (SuggestionController, TextViewController, NSWindow) {
         let textController = Mock.textViewController(theme: Mock.theme())
         textController.loadView()
+        // A document with real text: `showCompletions` resolves a rect for the
+        // caret offset before it paints, and on an empty buffer that lookup
+        // fails — which would make every assertion below pass without ever
+        // reaching the code under test.
+        textController.setText("SELECTED FROM")
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
             styleMask: [.titled], backing: .buffered, defer: false)
@@ -102,6 +125,42 @@ struct SuggestionRequestCoalescingTests {
         )
 
         delegate.releaseAll()
+    }
+
+    /// An answer that arrives after the caret has moved on must not be shown.
+    ///
+    /// This is the case cancellation cannot cover. `cursorsUpdated`'s refine
+    /// path answers a keystroke synchronously from the list already in hand and
+    /// issues no new request — so there is nothing to cancel the outstanding one
+    /// from, and it lands later and replaces the narrowed list with the wider
+    /// one it was narrowed from. On screen that reads as the window ignoring
+    /// every character after the first.
+    @Test
+    func anAnswerForAnAbandonedCaretPositionIsNotShown() async throws {
+        let (controller, textController, _window) = try makeHost()
+        let delegate = BlockingDelegate()
+        delegate.itemsToReturn = [StubEntry(label: "wide")]
+
+        // Request made for location 1.
+        controller.cursorsUpdated(
+            textView: textController, delegate: delegate,
+            position: CursorPosition(range: NSRange(location: 1, length: 0)), presentIfNot: true)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(delegate.continuations.count == 1)
+
+        // The caret moves on, and something else narrows the window — exactly
+        // what the refine path does, without issuing a request.
+        textController.setCursorPositions([CursorPosition(range: NSRange(location: 4, length: 0))])
+        controller.model.items = [StubEntry(label: "narrow")]
+
+        // Only now does the original request come back.
+        delegate.releaseAll()
+        try await Task.sleep(for: .milliseconds(120))
+
+        #expect(
+            controller.model.items.map(\.label) == ["narrow"],
+            "an answer built for a caret position that no longer exists overwrote the current list"
+        )
     }
 
     /// The bookkeeping half, and the ordering it needs: the *older* request has
