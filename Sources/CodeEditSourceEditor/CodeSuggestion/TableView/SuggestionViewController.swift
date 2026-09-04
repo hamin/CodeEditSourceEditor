@@ -318,7 +318,12 @@ extension SuggestionViewController: NSTableViewDataSource, NSTableViewDelegate {
 
     public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         CodeSuggestionRowView { [weak self] in
-            self?.model?.activeTextView?.theme.background ?? NSColor.controlBackgroundColor
+            // `theme.selection`, not `theme.background`. Filling the selected
+            // row with the colour already behind it draws the highlight
+            // invisibly over itself — keyboard navigation still moves the
+            // selection, and nothing on screen says where it is, so the only
+            // way to find out what return will insert is to press it.
+            self?.model?.activeTextView?.theme.selection ?? NSColor.selectedContentBackgroundColor
         }
     }
 

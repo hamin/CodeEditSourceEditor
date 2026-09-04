@@ -163,6 +163,61 @@ struct SuggestionRequestCoalescingTests {
         )
     }
 
+    /// Applying a completion must not read as the user typing.
+    ///
+    /// The insertion is an ordinary text mutation whose last character is
+    /// usually a letter, so without a way to tell the two apart the trigger
+    /// model reopens the window offering the entry that was just accepted.
+    @Test
+    func applyingACompletionIsNotTreatedAsTyping() async throws {
+        let (controller, textController, _window) = try makeHost()
+        let delegate = BlockingDelegate()
+        delegate.itemsToReturn = [StubEntry(label: "SELECT")]
+
+        controller.cursorsUpdated(
+            textView: textController, delegate: delegate,
+            position: CursorPosition(range: NSRange(location: 1, length: 0)), presentIfNot: true)
+        try await Task.sleep(for: .milliseconds(50))
+        delegate.releaseAll()
+        try await Task.sleep(for: .milliseconds(80))
+
+        // `.shared` deliberately: the trigger model is not main-actor isolated
+        // and reaches the controller through the singleton, so that is the
+        // instance whose flag actually gates a re-trigger.
+        #expect(SuggestionController.shared.isApplyingCompletion == false, "not applying anything yet")
+
+        // The flag is what the trigger model reads, and it has to be true for
+        // the whole of the delegate call — the mutation happens inside it.
+        var observedDuringApply: Bool?
+        let observer = ObservingDelegate {
+            observedDuringApply = SuggestionController.shared.isApplyingCompletion
+        }
+        controller.model.delegate = observer
+        controller.model.applySelectedItem(item: StubEntry(label: "SELECT"), window: nil)
+
+        #expect(observedDuringApply == true, "the trigger model cannot tell an insertion from typing")
+        #expect(SuggestionController.shared.isApplyingCompletion == false,
+                "the flag outlived the insertion")
+    }
+
+    /// A delegate that reports what it saw while its insertion callback ran.
+    final class ObservingDelegate: CodeSuggestionDelegate {
+        let onApply: () -> Void
+        init(onApply: @escaping () -> Void) { self.onApply = onApply }
+
+        func completionSuggestionsRequested(
+            textView: TextViewController, cursorPosition: CursorPosition
+        ) async -> (windowPosition: CursorPosition, items: [CodeSuggestionEntry])? { nil }
+
+        func completionOnCursorMove(
+            textView: TextViewController, cursorPosition: CursorPosition
+        ) -> [CodeSuggestionEntry]? { nil }
+
+        func completionWindowApplyCompletion(
+            item: CodeSuggestionEntry, textView: TextViewController, cursorPosition: CursorPosition?
+        ) { onApply() }
+    }
+
     /// The bookkeeping half, and the ordering it needs: the *older* request has
     /// to finish while the newer one is still outstanding.
     ///

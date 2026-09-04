@@ -28,6 +28,11 @@ final class SuggestionTriggerCharacterModel {
             return
         }
 
+        // Writing a completion into the buffer is not the user typing. Without
+        // this, accepting a suggestion immediately reopens the window offering
+        // the suggestion that was just accepted.
+        guard !SuggestionController.shared.isApplyingCompletion else { return }
+
         let mutation = TextMutation(
             string: string,
             range: range,
